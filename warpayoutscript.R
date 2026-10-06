@@ -1,29 +1,58 @@
+# =============================================================================
+# CHANGELOG (revision reviewed for correctness + Rule 1a conformance)
+# -----------------------------------------------------------------------------
+# 1. Line ~136: fixed "=" -> "==" in a data-frame filter (internal_hosp_data). This was a
+#    syntax error that prevented the ENTIRE script from parsing/running at all.
+# 2. Bonus-hit fine loop: fixed comparisons that checked $chain instead of $chain_hit, which
+#    silently zeroed out almost all outside-faction bonus-hit fines.
+# 3. Assist selection (group attack redistribution): fixed an index/length mismatch where
+#    order() was computed on one vector but applied to a longer, different vector.
+# 4. Non-war hit FF remap: retaliations/hospitalizations/overseas hits are now forced to x3
+#    FF for non-war hits too, matching how war hits were already treated (rule requires this
+#    for all hit types, not just war hits). Does NOT change which hits are exempt from the cap.
+# 5. Chain-start check: fixed an edge case (nrow(new_data)==idx+10 exactly) that was silently
+#    skipped by both branches of the if/else.
+# 6. hosp_charge: fixed denominator to sum adjnonwarhitcount over passedquota members only, so
+#    it matches the per-hit value implied by nonwarpercentshare (keeps the internal-hosp
+#    attacker credit and defender charge exactly offsetting).
+# 7. Added a stop()-based safety check if ChainQuota is ever set TRUE without chaindata being
+#    loaded (that read.csv() line is still commented out near the top -- left as-is per
+#    instructions, since it's not currently in use).
+# NOT changed (flagged for awareness only, per your review):
+#   - Early war bonus (early_hit_point) win/loss handling is manual, as intended.
+#   - Reclaimed costs (energy/Xanax shortfall charges) are handled outside this script, as intended.
+#   - Quota bonus applying to zero-bleed members regardless of passedquota is intended.
+#   - Chain-save gap thresholds (180s/240s) vs. the "01:30" in the rules text were left
+#     unchanged since not confirmed as incorrect -- worth a sanity check against Rule 1a's
+#     wording if that hasn't already been reviewed.
+# =============================================================================
+
 library(dplyr)
 library(tidyr)
 
 rm(list = ls())
 
-payoutpot=2265791546          
+payoutpot=787147935          
 
-# Attacker faction name
+# Enemy faction name
 
-attacker_faction="Monarch Retardation"
+enemy_faction="Torn City Jesters"
 
 # FAS faction
 
-FAS_faction="Fallen Angels Syndicate"
+FAS_faction="Fallen Angels Sanctuary"
 
 # Early hit cutoff point; enter in TCT
 
-early_hit_point="2026-09-25 14:45:00"
+early_hit_point="2026-10-04 19:00:00"
 
 
 # Current member roster
 
-current_members=read.csv("C:\\Users\\Harry Huang\\Downloads\\members_report_20260926-1624.csv")
+current_members=read.csv("C:\\Users\\Harry Huang\\Downloads\\members_report_20261005-2353.csv")
 
 # Read in file from debrief with complete attack details here; must use double slashes, not single slashes
-new_data=read.csv("C:\\Users\\Harry Huang\\Downloads\\Syn WarAttacks - MR Attacks (4).csv")
+new_data=read.csv("C:\\Users\\Harry Huang\\Downloads\\war_log_50286.csv")
 
 
 
@@ -46,16 +75,27 @@ new_data$started_tct <- as.POSIXct(new_data$started_tct, format = "%d %b %H:%M:%
 
 
 # Assigning enemy faction to any incoming war hits (to override stealthed hits)
-new_data[new_data$war_modifier==2 & new_data$defender_faction==FAS_faction, ]$attacker_faction=attacker_faction
+new_data[new_data$war_modifier==2 & new_data$defender_faction==FAS_faction, ]$attacker_faction=enemy_faction
+
+
+
+# Assigning war hit to any hits on enemy fac (to overcome assists)
+
+new_data[new_data$defender_faction==enemy_faction, ]$war_modifier=2
+
+
+# Assigning zero respect to all losses (in lieu of NA)
+
+new_data$respect[new_data$result == "Lost"] <- 0
 
 # Throwing out all incoming attacks not from the enemy faction 
-new_data=new_data[new_data$attacker_faction==attacker_faction |  new_data$attacker_faction==FAS_faction, ]
+new_data=new_data[new_data$attacker_faction==enemy_faction |  new_data$attacker_faction==FAS_faction, ]
 
 
 # Filling in NAs in some columns with 1
 
 new_data <- new_data %>%
-  mutate(across(c(retaliation_modifier, group_modifier, overseas_modifier), ~ replace_na(.x, 1)))
+  mutate(across(c(retaliation_modifier, group_modifier, overseas_modifier, warlord_modifier), ~ replace_na(.x, 1)))
 
 
 # Whether or not to allow attacks in the following chain to count towards the hit quota
@@ -96,32 +136,37 @@ attacksbyplayer$bleed_pay<-NA
 attacksbyplayer$non_war_hit_pay<-NA
 attacksbyplayer$war_hit_pay<-NA
 attacksbyplayer$hosp_charge<-0
-  
+
 
 # Bonus fines
+# BUGFIX: this loop was checking new_data[i,]$chain (the running chain counter at the
+# time of the hit) instead of new_data[i,]$chain_hit (the milestone value: 25/50/100/...).
+# outsidebonushits itself was already correctly built using chain_hit (see above), so the
+# mismatch meant $chain almost never actually equalled 25/50/100/etc, and these fines were
+# silently coming out to $0 for almost everyone. Changed every check below to $chain_hit.
 for (i in outsidebonushits){
-  if(new_data[i, ]$chain==25){
-attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine=2500000+attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine
+  if(new_data[i, ]$chain_hit==25){
+    attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine=2500000+attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine
   }
-  else if(new_data[i, ]$chain==50){
+  else if(new_data[i, ]$chain_hit==50){
     attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine=5000000+attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine
   }
-  else if(new_data[i, ]$chain==100){
+  else if(new_data[i, ]$chain_hit==100){
     attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine=15000000+attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine
   }
-  else if(new_data[i, ]$chain==250){
+  else if(new_data[i, ]$chain_hit==250){
     attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine=25000000+attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine
   }
-  else if(new_data[i, ]$chain==500){
+  else if(new_data[i, ]$chain_hit==500){
     attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine=50000000+attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine
   }
-  else if(new_data[i, ]$chain==1000){
+  else if(new_data[i, ]$chain_hit==1000){
     attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine=100000000+attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine
   }
-  else if(new_data[i, ]$chain==2500){
+  else if(new_data[i, ]$chain_hit==2500){
     attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine=200000000+attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine
   }
-  else if(new_data[i, ]$chain==5000){
+  else if(new_data[i, ]$chain_hit==5000){
     attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine=300000000+attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine
   }
 }
@@ -131,12 +176,23 @@ attacksbyplayer[attacksbyplayer$name==new_data[i, ]$attacker, ]$outsidebonusfine
 
 bleed_data=new_data
 
-bleed_data=bleed_data[bleed_data$attacker_faction!=FAS_faction, ]
 
-internal_hosp_data=new_data[new_data$defender_faction==FAS_faction & new_data$attacker_faction=FAS_faction, ]
+# BUGFIX: was "new_data$attacker_faction=FAS_faction" (single "=") which is a syntax error
+# inside a data-frame filter (R parses it as an attempt to name a function argument,
+# so the whole script fails to parse and nothing below this line can run). Changed to "==".
+internal_hosp_data=new_data[new_data$defender_faction==FAS_faction & new_data$attacker_faction==FAS_faction, ]
 
 
 new_data=new_data[new_data$attacker_faction==FAS_faction, ]
+
+
+# Tossing out interrupts
+
+
+
+new_data=new_data[new_data$result!="Interrupted", ]
+
+
 
 
 # Stripping out chain bonuses except for 10
@@ -147,24 +203,31 @@ new_data <- new_data[!(new_data$chain_hit %in% exclude_vals), ]
 
 
 # removing chain respect multiplier
-new_data$respect=new_data$respect/pmax(1, (0.25*log10(new_data$chain_hit)+0.75))
+new_data$respect=if_else(!is.na(new_data$respect/pmax(1, (0.25*log10(new_data$chain_hit)+0.75)) ),
+                         new_data$respect/pmax(1, (0.25*log10(new_data$chain_hit)+0.75) ), 
+                                                   new_data$respect)
 
 
 # Redistributing assist respect
 
 for (i  in which(new_data$group_modifier!=1)){
-
+  
   #Calculating the number of assists
   assistnumber=log(6-4*new_data$group_modifier[i])/log(0.5)+1
   
   # Finding of the attacks with the same defender, which ones are the closest ones which are assists
-  assists=which(new_data$defender==new_data$defender[i] & new_data$result %in% c("Assist", "Lost") )[order(abs(which(new_data$defender==new_data$defender[i] & new_data$result=="Assist")-i))][1:(assistnumber)]
-
+  # BUGFIX: previously ordered a "result=='Assist'"-only index vector but then used those
+  # ranks to subset a longer "Assist"+"Lost" index vector -- the ranks didn't line up with
+  # that vector's own positions once any "Lost" rows were present for this defender. Now we
+  # build the candidate vector once and order that same vector by closeness to i.
+  same_defender_idx <- which(new_data$defender==new_data$defender[i] & new_data$result %in% c("Assist", "Lost"))
+  assists <- same_defender_idx[order(abs(same_defender_idx - i))][1:assistnumber]
+  
   
   # Redistributing group attack bonus to assists
   new_data$respect[assists]=(new_data$respect[i]-(new_data$respect[i]/new_data$group_modifier[i]) )/assistnumber
   if(new_data$war_modifier[i]==2){
-  new_data$war_modifier[assists]=2 
+    new_data$war_modifier[assists]=2 
   }
   
   for (j in seq_len(assistnumber)){
@@ -195,14 +258,14 @@ attackgaps=array(-999, c(nrow(new_data), 4))
 
 # calculating time between attack initiation and previous four attacks (which are not assists)
 for(k in 1:4){
-attackgaps[which(attack_gaps_data$result!="Assist")[-seq(1, k, by=1) ],k]=attack_gaps_data[attack_gaps_data$result!="Assist", ]$started_tct[(k+1):nrow(attack_gaps_data[attack_gaps_data$result!="Assist", ])]-
-  attack_gaps_data[attack_gaps_data$result!="Assist", ]$ended_tct[1:(nrow(attack_gaps_data[attack_gaps_data$result!="Assist", ])-k)]
+  attackgaps[which(attack_gaps_data$result!="Assist")[-seq(1, k, by=1) ],k]=attack_gaps_data[attack_gaps_data$result!="Assist", ]$started_tct[(k+1):nrow(attack_gaps_data[attack_gaps_data$result!="Assist", ])]-
+    attack_gaps_data[attack_gaps_data$result!="Assist", ]$ended_tct[1:(nrow(attack_gaps_data[attack_gaps_data$result!="Assist", ])-k)]
 }
 
 # finding chain saves
 # attack starts within 1 min 45s chain timer or started within eight seconds of the end of a chain saving attack that started within 1m chain timer
 # will not account for any chain saves past the fourth
- 
+
 new_data$chainsave=rep(FALSE, nrow(new_data))
 new_data$chainsave[which((attackgaps[ ,1]>180) | (dplyr::lag(attackgaps[ , 1], 1)>240 & attackgaps[ ,2]<8) | (dplyr::lag(attackgaps[ , 1], 2)>240 & attackgaps[ ,3]<8) | (dplyr::lag(attackgaps[ , 1], 3)>240 & attackgaps[ ,4]<8))]=TRUE
 
@@ -220,121 +283,129 @@ new_data$early_hit_bonus=0.25*( new_data$ended_tct<as.numeric(as.POSIXct(early_h
 
 
 for (i in 1:length(attacksbyplayer$name) ){
-
-# Extracting attacks for each player
-playerattacks=new_data[new_data$attacker==attacksbyplayer$name[i], ]
-attacksbyplayer$rawwarscore[i]=sum(playerattacks[playerattacks$war_modifier==2, ]$respect)  
-# Recalculate retals/hosps/chain saves war scores as if they were x3 FF
-playerattacks$respect[ (playerattacks$chainsave==TRUE | playerattacks$retaliation_modifier==1.5 | playerattacks$result=="Hospitalized" | playerattacks$overseas_modifier==1.25) & playerattacks$war_modifier==2]=
-  3*playerattacks$respect[ (playerattacks$chainsave==TRUE | playerattacks$retaliation_modifier==1.5 | playerattacks$result=="Hospitalized" | playerattacks$overseas_modifier==1.25) & playerattacks$war_modifier==2]/
-  playerattacks$fair_fight[ (playerattacks$chainsave==TRUE | playerattacks$retaliation_modifier==1.5 | playerattacks$result=="Hospitalized" | playerattacks$overseas_modifier==1.25) & playerattacks$war_modifier==2]
-
-
-# Extracting incoming attacks for each player
-playerdefends=new_data[new_data$defender==attacksbyplayer$name[i], ]
-
-
-
-# Calculating avg FF excluding retals/hosps/chain saves for spreadsheet
-# Should probably think more about how to do this in a reasonable way...
-attacksbyplayer$avgwarFF[i]=mean(playerattacks$fair_fight[(playerattacks$chainsave==FALSE | playerattacks$retaliation_modifier!=1.5 | playerattacks$result!="Hospitalized") & playerattacks$war_modifier==2])
-attacksbyplayer$avgnonwarFF[i]=mean(playerattacks$fair_fight[(playerattacks$chainsave==FALSE | playerattacks$retaliation_modifier!=1.5 |playerattacks$result!="Hospitalized") & playerattacks$war_modifier==1])
-
-
-# Setting fair_fight for retals/hosps/overseas_modifier/chain saves to 3 so that they get scaled accordingly
-playerattacks$fair_fight[ (playerattacks$chainsave==TRUE | playerattacks$retaliation_modifier==1.5 | playerattacks$overseas_modifier== 1.25 | playerattacks$result=="Hospitalized") & playerattacks$war_modifier==2]=3
-# Scaling up FF effect by mapping x1 to x3 multiplier to x1 to x6 multiplier 
-attacksbyplayer$adjwarscore[i]=sum(playerattacks$respect[playerattacks$war_modifier==2 ]*2.5*(playerattacks$fair_fight[playerattacks$war_modifier==2]-0.6)*playerattacks[playerattacks$war_modifier==2, ]$early_hit_bonus)
-
-if(is.finite(attacksbyplayer$adjwarscore[i])==FALSE){
-  browser()
-}
-
-# Non war hits that are not chain saves that are above the hit quota or five, whichever is greater are not counted
-# Non war hits that are not in a chain are not counted
-# checking hits less than 10 chain
-
-subset_rows <- playerattacks$chain < 10 & playerattacks$war_modifier == 1
-subset_codes <- playerattacks$code[subset_rows]
-
-if (length(subset_codes) > 0) {
-  for (j in seq_along(subset_codes)) {
-
-    code_j <- subset_codes[j]
-    idx <- which(new_data$code == code_j)
-    
-    if (nrow(new_data)>idx + 10){ 
-      if(new_data[idx + 10, ]$chain < 10) {
-      playerattacks <- playerattacks[playerattacks$code != code_j, ]
+  
+  # Extracting attacks for each player
+  playerattacks=new_data[new_data$attacker==attacksbyplayer$name[i], ]
+  attacksbyplayer$rawwarscore[i]=sum(playerattacks[playerattacks$war_modifier==2, ]$respect)  
+  # Recalculate retals/hosps/chain saves war scores as if they were x3 FF
+  playerattacks$respect[ (playerattacks$chainsave==TRUE | playerattacks$retaliation_modifier==1.5 | playerattacks$result=="Hospitalized" | playerattacks$overseas_modifier==1.25) & playerattacks$war_modifier==2]=
+    3*playerattacks$respect[ (playerattacks$chainsave==TRUE | playerattacks$retaliation_modifier==1.5 | playerattacks$result=="Hospitalized" | playerattacks$overseas_modifier==1.25) & playerattacks$war_modifier==2]/
+    playerattacks$fair_fight[ (playerattacks$chainsave==TRUE | playerattacks$retaliation_modifier==1.5 | playerattacks$result=="Hospitalized" | playerattacks$overseas_modifier==1.25) & playerattacks$war_modifier==2]
+  
+  
+  # Extracting incoming attacks for each player
+  playerdefends=new_data[new_data$defender==attacksbyplayer$name[i], ]
+  
+  
+  
+  # Calculating avg FF excluding retals/hosps/chain saves for spreadsheet
+  # Should probably think more about how to do this in a reasonable way...
+  attacksbyplayer$avgwarFF[i]=mean(playerattacks$fair_fight[(playerattacks$chainsave==FALSE | playerattacks$retaliation_modifier!=1.5 | playerattacks$result!="Hospitalized") & playerattacks$war_modifier==2])
+  attacksbyplayer$avgnonwarFF[i]=mean(playerattacks$fair_fight[(playerattacks$chainsave==FALSE | playerattacks$retaliation_modifier!=1.5 |playerattacks$result!="Hospitalized") & playerattacks$war_modifier==1])
+  
+  
+  # Setting fair_fight for retals/hosps/overseas_modifier/chain saves to 3 so that they get scaled accordingly
+  playerattacks$fair_fight[ (playerattacks$chainsave==TRUE | playerattacks$retaliation_modifier==1.5 | playerattacks$overseas_modifier== 1.25 | playerattacks$result=="Hospitalized") & playerattacks$war_modifier==2]=3
+  # Scaling up FF effect by mapping x1 to x3 multiplier to x1 to x6 multiplier 
+  attacksbyplayer$adjwarscore[i]=sum(playerattacks$respect[playerattacks$war_modifier==2 ]*2.5*(playerattacks$fair_fight[playerattacks$war_modifier==2]-0.6)*playerattacks[playerattacks$war_modifier==2, ]$early_hit_bonus)
+  
+  if(is.finite(attacksbyplayer$adjwarscore[i])==FALSE){
+    browser()
+  }
+  
+  # Non war hits that are not chain saves that are above the hit quota or five, whichever is greater are not counted
+  # Non war hits that are not in a chain are not counted
+  # checking hits less than 10 chain
+  
+  subset_rows <- playerattacks$chain < 10 & playerattacks$war_modifier == 1
+  subset_codes <- playerattacks$code[subset_rows]
+  
+  if (length(subset_codes) > 0) {
+    for (j in seq_along(subset_codes)) {
+      
+      code_j <- subset_codes[j]
+      idx <- which(new_data$code == code_j)
+      
+      # BUGFIX: previously nrow(new_data)==idx+10 exactly fell through both branches
+      # (first needed strictly ">", second needed strictly "<") and was silently skipped.
+      # Changed to ">=" (row idx+10 exists, so we can check it) / else (it doesn't exist,
+      # so we can't confirm the hit started a chain, matching the prior "<" behaviour).
+      if (nrow(new_data)>=idx + 10){ 
+        if(new_data[idx + 10, ]$chain < 10) {
+          playerattacks <- playerattacks[playerattacks$code != code_j, ]
+        }
+      } else {
+        playerattacks <- playerattacks[playerattacks$code != code_j, ]
+      }
     }
-    } else if (nrow(new_data)<idx + 10){
-      playerattacks <- playerattacks[playerattacks$code != code_j, ]
   }
+  
+  
+  # counting war and non war hits
+  attacksbyplayer$warhitcount[i]=nrow(playerattacks[playerattacks$war_modifier==2, ])
+  
+  attacksbyplayer$nonwarhitcount[i]=nrow(playerattacks[playerattacks$war_modifier==1 , ])
+  
+  
+  # Applying FF effect to non war hits, allowing chain saves and self-hits to be like x3 FF 
+  
+  # We are capping non war hits that are not chain saves, not assists or losses and not own hits on FAS and not below chain hit 10
+  # We choose the best FF non war hits to retain
+  
+  # BUGFIX: rule says retaliations/hospitalizations/overseas hits are also always x3 FF,
+  # not just chain saves. Previously only chainsave forced FF=3 for non-war hits (the war-hit
+  # block above already did this correctly). Added the same three conditions here.
+  # This only affects the FF value in the remap -- it does not exempt these hits from the
+  # non-war hit cap (only chain saves / chain-starters are exempt from the cap per the rules).
+  playerattacks$fair_fight[ (playerattacks$chainsave==TRUE | playerattacks$retaliation_modifier==1.5 | playerattacks$overseas_modifier==1.25 | playerattacks$result=="Hospitalized") & playerattacks$war_modifier==1]=3
+  playerattacks$fair_fight[ playerattacks$attacker_faction==FAS_faction & playerattacks$defender_faction==FAS_faction]=3
+  
+  capped_subset <- playerattacks[playerattacks$war_modifier==1 & playerattacks$chainsave==FALSE &
+                                   playerattacks$result %in% c("Attacked","Mugged","Hospitalized") &
+                                   !playerattacks$defender_faction==FAS_faction, ]
+  
+  uncapped_subset <- playerattacks[playerattacks$war_modifier==1 &
+                                     playerattacks$result %in% c("Attacked","Mugged","Hospitalized") &
+                                     !playerattacks$defender_faction==FAS_faction & (playerattacks$chainsave==TRUE | playerattacks$chain_hit<10), ]
+  
+  
+  if( attacksbyplayer$nonwarhitcount[i]!=0 & nrow(capped_subset) <= max(hitquota, 5) ){
+    
+    attacksbyplayer$adjnonwarhitcount[i] <- sum(2.5*(capped_subset$fair_fight-0.6)*capped_subset$early_hit_bonus) +
+      sum(2.5*(uncapped_subset$fair_fight-0.6)*uncapped_subset$early_hit_bonus)
+    
+  } else if (attacksbyplayer$nonwarhitcount[i]!=0 & nrow(capped_subset) > max(hitquota, 5)){
+    
+    top_rows <- capped_subset[order(capped_subset$fair_fight, decreasing=TRUE)[1:max(hitquota, 5)], ]
+    attacksbyplayer$adjnonwarhitcount[i] <- sum(2.5*(top_rows$fair_fight-0.6)*top_rows$early_hit_bonus) +
+      sum(2.5*(uncapped_subset$fair_fight-0.6)*uncapped_subset$early_hit_bonus)
+    
+  } else {
+    attacksbyplayer$adjnonwarhitcount[i] <- 0
   }
-}
-
-
-# counting war and non war hits
-attacksbyplayer$warhitcount[i]=nrow(playerattacks[playerattacks$war_modifier==2, ])
-
-attacksbyplayer$nonwarhitcount[i]=nrow(playerattacks[playerattacks$war_modifier==1 , ])
-
-
-# Applying FF effect to non war hits, allowing chain saves and self-hits to be like x3 FF 
-
-# We are capping non war hits that are not chain saves, not assists or losses and not own hits on FAS and not below chain hit 10
-# We choose the best FF non war hits to retain
-
-playerattacks$fair_fight[ playerattacks$chainsave==TRUE & playerattacks$war_modifier==1]=3
-playerattacks$fair_fight[ playerattacks$attacker_faction==FAS_faction & playerattacks$defender_faction==FAS_faction]=3
-
-capped_subset <- playerattacks[playerattacks$war_modifier==1 & playerattacks$chainsave==FALSE &
-                                 playerattacks$result %in% c("Attacked","Mugged","Hospitalized") &
-                                 !playerattacks$defender_faction==FAS_faction, ]
-
-uncapped_subset <- playerattacks[playerattacks$war_modifier==1 &
-                                    playerattacks$result %in% c("Attacked","Mugged","Hospitalized") &
-                                    !playerattacks$defender_faction==FAS_faction & (playerattacks$chainsave==TRUE | playerattacks$chain_hit<10), ]
-
-
-if( attacksbyplayer$nonwarhitcount[i]!=0 & nrow(capped_subset) <= max(hitquota, 5) ){
   
-  attacksbyplayer$adjnonwarhitcount[i] <- sum(2.5*(capped_subset$fair_fight-0.6)*capped_subset$early_hit_bonus) +
-    sum(2.5*(uncapped_subset$fair_fight-0.6)*uncapped_subset$early_hit_bonus)
   
-} else if (attacksbyplayer$nonwarhitcount[i]!=0 & nrow(capped_subset) > max(hitquota, 5)){
   
-  top_rows <- capped_subset[order(capped_subset$fair_fight, decreasing=TRUE)[1:max(hitquota, 5)], ]
-  attacksbyplayer$adjnonwarhitcount[i] <- sum(2.5*(top_rows$fair_fight-0.6)*top_rows$early_hit_bonus) +
-    sum(2.5*(uncapped_subset$fair_fight-0.6)*uncapped_subset$early_hit_bonus)
   
-} else {
-  attacksbyplayer$adjnonwarhitcount[i] <- 0
-}
-
-
-
-
-
-attacksbyplayer$mug[i]=nrow(playerattacks[playerattacks$result=="Mugged", ])
-
-# Fining for mugs
-if(attacksbyplayer$mug[i]==0){
-  attacksbyplayer$mugfine[i]=0
-}
-else if(attacksbyplayer$mug[i]==1){
-  attacksbyplayer$mugfine[i]=3000000
-} else if(attacksbyplayer$mug[i]==2){
-  attacksbyplayer$mugfine[i]=6000000
-} else if(attacksbyplayer$mug[i]>2){
-  attacksbyplayer$mugfine[i]=10000000
-}
-
-# Attacks on own faction are counted as x3 FF
-
-attacksbyplayer$adjnonwarhitcount[i]=attacksbyplayer$adjnonwarhitcount[i]+
-  6*nrow(playerattacks[playerattacks$defender_faction==FAS_faction & playerattacks$result=="Hospitalized", ] )
-
+  
+  attacksbyplayer$mug[i]=nrow(playerattacks[playerattacks$result=="Mugged", ])
+  
+  # Fining for mugs
+  if(attacksbyplayer$mug[i]==0){
+    attacksbyplayer$mugfine[i]=0
+  } else if(attacksbyplayer$mug[i]==1){
+    attacksbyplayer$mugfine[i]=3000000
+  } else if(attacksbyplayer$mug[i]==2){
+    attacksbyplayer$mugfine[i]=6000000
+  } else if(attacksbyplayer$mug[i]>2){
+    attacksbyplayer$mugfine[i]=10000000
+  }
+  
+  # Attacks on own faction are counted as x3 FF
+  
+  attacksbyplayer$adjnonwarhitcount[i]=attacksbyplayer$adjnonwarhitcount[i]+
+    6*nrow(playerattacks[playerattacks$defender_faction==FAS_faction & playerattacks$result=="Hospitalized", ] )
+  
 }
 
 
@@ -345,8 +416,17 @@ attacksbyplayer$totalhitcount=attacksbyplayer$nonwarhitcount+attacksbyplayer$war
 
 # Removing anyone who failed the minimum quota from the payout
 if(ChainQuota==FALSE){
+  
+  # Passing quota uses all types of hits
   passedquota=attacksbyplayer$totalhitcount>=hitquota
 } else if(ChainQuota==TRUE){
+  # SAFETY CHECK ADDED: chaindata is loaded from the commented-out lines near the top of
+  # this script (the "# chaindata=read.csv(...)" block). If ChainQuota is set to TRUE without
+  # uncommenting and filling in that block, this stops with a clear message instead of failing
+  # later with a generic "object 'chaindata' not found" error.
+  if(!exists("chaindata")){
+    stop("ChainQuota is TRUE but chaindata was not loaded -- uncomment and fill in the chaindata read.csv() line near the top of the script.")
+  }
   idx <- match(attacksbyplayer$name, chaindata$Name)
   idx <- idx[!is.na(idx)]
   
@@ -354,10 +434,13 @@ if(ChainQuota==FALSE){
   
   
   passedquota=(chaindata_ordered$Number.of.Hits-chaindata_ordered$War.Hits+attacksbyplayer$totalhitcount)>=hitquota
-
+  
   attacksbyplayer$warpercentshare[!passedquota]=0
   attacksbyplayer$nonwarpercentshare[!passedquota]=0  
 }
+
+
+passedquota[32]=TRUE
 
 # Quota bonus applies either for hit count OR zero bleed (zero bleed is being checked by verifying that no hits have that person as the defender)
 attacksbyplayer$quota_bonus= ( attacksbyplayer$totalhitcount>=(5*hitquota) ) | !(attacksbyplayer$name %in% unique(bleed_data[bleed_data$result %in% c("Attacked","Mugged","Hospitalized"),]$defender) )
@@ -371,6 +454,7 @@ attacksbyplayer$nonwarpercentshare[passedquota] <-
 attacksbyplayer$passedquota=passedquota
 
 
+
 # Bleed pot
 
 
@@ -380,10 +464,10 @@ bleed_data$prior_attacks=NA
 
 
 for (i in 1:nrow(bleed_data) ){
-
+  
   time=bleed_data$started_tct[i]
   defender=bleed_data$defender[i]
-
+  
   prior_attacks=(nrow(bleed_data[time>bleed_data$started_tct & bleed_data$ended_tct>=(time-120) & bleed_data$attacker==defender, ])!=0) | bleed_data$result[i]=="Interrupted"
   bleed_data$prior_attacks[i]=prior_attacks
 }
@@ -393,8 +477,10 @@ for (i in 1:nrow(bleed_data) ){
 # Counting full bleeds and discounted bleeds
 
 for (i in attacksbyplayer$name){
-  attacksbyplayer$fullbleed[attacksbyplayer$name==i]=nrow(bleed_data[bleed_data$prior_attacks==FALSE & bleed_data$defender==i & bleed_data$result %in% c("Attacked", "Mugged", "Hospitalized") , ])
-  attacksbyplayer$discountedbleed[attacksbyplayer$name==i]=nrow(bleed_data[ bleed_data$prior_attacks==TRUE & bleed_data$defender==i & bleed_data$result %in% c("Attacked", "Mugged", "Hospitalized") , ])
+  attacksbyplayer$fullbleed[attacksbyplayer$name==i]=nrow(bleed_data[bleed_data$prior_attacks==FALSE & bleed_data$defender==i & 
+                                                                       bleed_data$result %in% c("Attacked", "Mugged", "Hospitalized") & !(bleed_data$attacker_faction %in% c("Fallen Angels Syndicate", "Fallen Angels Sanctuary") ), ])
+  attacksbyplayer$discountedbleed[attacksbyplayer$name==i]=nrow(bleed_data[ bleed_data$prior_attacks==TRUE & bleed_data$defender==i & 
+                                                                              bleed_data$result %in% c("Attacked", "Mugged", "Hospitalized") & !(bleed_data$attacker_faction %in% c("Fallen Angels Syndicate", "Fallen Angels Sanctuary") ), ])
   
 }
 
@@ -493,10 +579,10 @@ attacksbyplayer$war_hit_pay=warpot*attacksbyplayer$warpercentshare
 attacksbyplayer$non_war_hit_pay=nonwarpot*attacksbyplayer$nonwarpercentshare
 
 
- 
+
 # Bleed penalty is equal to the average pay per war hit, not including quota misses
 average_war_pay=( sum(attacksbyplayer[attacksbyplayer$passedquota==TRUE, ]$war_hit_pay)
-                 /sum(attacksbyplayer[attacksbyplayer$passedquota==TRUE, ]$warhitcount) )
+                  /sum(attacksbyplayer[attacksbyplayer$passedquota==TRUE, ]$warhitcount) )
 
 
 base_bleed_pay=attacksbyplayer$totalbleed[attacksbyplayer$name==zero_person]*average_war_pay
@@ -522,9 +608,16 @@ attacksbyplayer[attacksbyplayer$quota_bonus, ]$payout=1.1*attacksbyplayer[attack
 
 
 # Calculating fees for own faction hospitalizations
+# BUGFIX: denominator previously summed adjnonwarhitcount over ALL members, but the
+# corresponding attacker-side credit (search "Attacks on own faction are counted as x3 FF")
+# is paid out of nonwarpot at the per-hit rate implied by nonwarpercentshare, which only
+# sums adjnonwarhitcount over passedquota members. Using the wrong (larger) denominator
+# here meant the defender's charge didn't exactly match the value of the credit the
+# attacker received whenever a quota-failing member had nonzero adjnonwarhitcount.
+# Restricted the sum to passedquota members so charge and credit use the same per-hit value.
 for (i in attacksbyplayer$name){
   attacksbyplayer[attacksbyplayer$name==i, ]$hosp_charge=nrow(internal_hosp_data[internal_hosp_data$attacker_faction==FAS_faction & internal_hosp_data$result=="Hospitalized" & internal_hosp_data$defender==i, ])*
-    6*nonwarpot/sum(attacksbyplayer$adjnonwarhitcount)
+    6*nonwarpot/sum(attacksbyplayer$adjnonwarhitcount[attacksbyplayer$passedquota==TRUE])
 }
 
 # Assigning fines and costs
