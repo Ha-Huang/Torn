@@ -1,58 +1,30 @@
-# =============================================================================
-# CHANGELOG (revision reviewed for correctness + Rule 1a conformance)
-# -----------------------------------------------------------------------------
-# 1. Line ~136: fixed "=" -> "==" in a data-frame filter (internal_hosp_data). This was a
-#    syntax error that prevented the ENTIRE script from parsing/running at all.
-# 2. Bonus-hit fine loop: fixed comparisons that checked $chain instead of $chain_hit, which
-#    silently zeroed out almost all outside-faction bonus-hit fines.
-# 3. Assist selection (group attack redistribution): fixed an index/length mismatch where
-#    order() was computed on one vector but applied to a longer, different vector.
-# 4. Non-war hit FF remap: retaliations/hospitalizations/overseas hits are now forced to x3
-#    FF for non-war hits too, matching how war hits were already treated (rule requires this
-#    for all hit types, not just war hits). Does NOT change which hits are exempt from the cap.
-# 5. Chain-start check: fixed an edge case (nrow(new_data)==idx+10 exactly) that was silently
-#    skipped by both branches of the if/else.
-# 6. hosp_charge: fixed denominator to sum adjnonwarhitcount over passedquota members only, so
-#    it matches the per-hit value implied by nonwarpercentshare (keeps the internal-hosp
-#    attacker credit and defender charge exactly offsetting).
-# 7. Added a stop()-based safety check if ChainQuota is ever set TRUE without chaindata being
-#    loaded (that read.csv() line is still commented out near the top -- left as-is per
-#    instructions, since it's not currently in use).
-# NOT changed (flagged for awareness only, per your review):
-#   - Early war bonus (early_hit_point) win/loss handling is manual, as intended.
-#   - Reclaimed costs (energy/Xanax shortfall charges) are handled outside this script, as intended.
-#   - Quota bonus applying to zero-bleed members regardless of passedquota is intended.
-#   - Chain-save gap thresholds (180s/240s) vs. the "01:30" in the rules text were left
-#     unchanged since not confirmed as incorrect -- worth a sanity check against Rule 1a's
-#     wording if that hasn't already been reviewed.
-# =============================================================================
 
 library(dplyr)
 library(tidyr)
 
 rm(list = ls())
 
-payoutpot=787147935          
+payoutpot=537552560          
 
 # Enemy faction name
 
-enemy_faction="Torn City Jesters"
+enemy_faction="Valiance"
 
 # FAS faction
 
-FAS_faction="Fallen Angels Sanctuary"
+FAS_faction="Fallen Angels Syndicate"
 
 # Early hit cutoff point; enter in TCT
 
-early_hit_point="2026-10-04 19:00:00"
+early_hit_point="2026-10-20 19:00:00"
 
 
 # Current member roster
 
-current_members=read.csv("C:\\Users\\Harry Huang\\Downloads\\members_report_20261005-2353.csv")
+current_members=read.csv("C:/Users/harry/Downloads/members_report_20261012-1658.csv")
 
 # Read in file from debrief with complete attack details here; must use double slashes, not single slashes
-new_data=read.csv("C:\\Users\\Harry Huang\\Downloads\\war_log_50286.csv")
+new_data=read.csv("C:\\Users\\harry\\Downloads\\war_log_50629.csv")
 
 
 
@@ -110,7 +82,7 @@ ChainQuota=FALSE
 
 # Hit quota is 1% of war hits
 
-hitquota=round(0.01*length(which(new_data$war_modifier==2)))
+hitquota=round(0.01*length(which(new_data$war_modifier==2 & (new_data$result %in% c("Attacked") ) & new_data$defender_faction==enemy_faction )) )
 
 outsidebonushits=which((new_data$chain_hit==5000 | new_data$chain_hit==2500 | new_data$chain_hit==1000 | new_data$chain_hit==500 | new_data$chain_hit==250 | new_data$chain_hit==100 | new_data$chain_hit==50 | new_data$chain_hit==25) & new_data$war_modifier==1)
 
