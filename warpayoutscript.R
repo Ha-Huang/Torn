@@ -4,6 +4,7 @@ library(tidyr)
 
 rm(list = ls())
 
+
 payoutpot=537552560          
 
 # Enemy faction name
@@ -14,16 +15,16 @@ enemy_faction="Valiance"
 
 FAS_faction="Fallen Angels Syndicate"
 
-# Early hit cutoff point; enter in TCT
+# Early hit cutoff point; enter in TCT. If we lost such that this rule does not apply, enter any time after the war ended.
 
 early_hit_point="2026-10-20 19:00:00"
 
 
-# Current member roster
+# Current member roster (from YATA)
 
 current_members=read.csv("C:/Users/harry/Downloads/members_report_20261012-1658.csv")
 
-# Read in file from debrief with complete attack details here; must use double slashes, not single slashes
+# Read in file with complete attack details here
 new_data=read.csv("C:\\Users\\harry\\Downloads\\war_log_50629.csv")
 
 
