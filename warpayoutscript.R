@@ -14,12 +14,12 @@ enemy_faction="Phoenix X"
 
 FAS_faction="Fallen Angels Syndicate"
 
-# Early hit cutoff point; enter in TCT
+# Early hit cutoff point; enter in TCT. If we lost such that this rule does not apply, enter any time after the war ended.
 
 early_hit_point="2026-11-08 16:00:00"
 
 
-# Current member roster
+# Current member roster (from YATA)
 
 current_members=read.csv("members_report_PX.csv")
 
